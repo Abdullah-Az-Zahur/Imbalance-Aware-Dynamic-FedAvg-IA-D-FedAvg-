@@ -12,12 +12,54 @@ from src.models import get_model
 from src.algorithms.ia_dfedavg import train_client_iad_fedavg, aggregate_weights
 from src.utils import get_best_device, evaluate_model
 
+def plot_and_save_results(history_acc, history_f1, final_metrics, rounds):
+    os.makedirs("./results", exist_ok=True)
+    
+    # ----------------------------------------------------
+    # Plot 1: Communication Rounds vs Metrics (Line Plot)
+    # ----------------------------------------------------
+    plt.figure(figsize=(10, 5))
+    plt.plot(range(1, rounds + 1), [a * 100 for a in history_acc], label='Test Accuracy (%)', marker='o', color='#1f77b4', linewidth=2)
+    plt.plot(range(1, rounds + 1), [f * 100 for f in history_f1], label='Test F1-Score (%)', marker='s', color='#ff7f0e', linewidth=2)
+    plt.xlabel('Communication Rounds', fontsize=12)
+    plt.ylabel('Percentage (%)', fontsize=12)
+    plt.title('IA-D FedAvg Learning Curve over Communication Rounds', fontsize=14)
+    plt.legend(fontsize=11)
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.tight_layout()
+    plt.savefig('./results/learning_curve_line.png', dpi=300)
+    plt.close()
+
+    # ----------------------------------------------------
+    # Plot 2: Final Evaluation Bar Chart
+    # ----------------------------------------------------
+    metric_names = ['Accuracy', 'Precision', 'Recall', 'F1-Score']
+    metric_values = [v * 100 for v in final_metrics]  # Convert to percentage
+    colors = ['#2ca02c', '#1f77b4', '#ff7f0e', '#d62728']
+
+    plt.figure(figsize=(8, 5))
+    bars = plt.bar(metric_names, metric_values, color=colors, width=0.5)
+    plt.ylabel('Score (%)', fontsize=12)
+    plt.title(f'Final Model Performance (Round {rounds})', fontsize=14)
+    plt.ylim(0, 100)
+    
+    # Add numerical value on top of each bar
+    for bar in bars:
+        yval = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2.0, yval + 1.5, f'{yval:.2f}%', ha='center', va='bottom', fontsize=10, fontweight='bold')
+
+    plt.grid(axis='y', linestyle='--', alpha=0.6)
+    plt.tight_layout()
+    plt.savefig('./results/final_metrics_bar.png', dpi=300)
+    plt.close()
+
+    print("\n[SUCCESS] Visualizations saved to './results/learning_curve_line.png' and './results/final_metrics_bar.png'")
+
 def main():
     device = get_best_device()
     
     images_dir, metadata_csv = setup_ham10000_dataset()
     
-    # Type Safety Check for Pylance / Pyright
     if metadata_csv is None or images_dir is None:
         raise FileNotFoundError("[ERROR] Dataset setup failed. Missing files.")
         
@@ -54,10 +96,15 @@ def main():
             client_indices[i].extend(splits[i])
 
     global_model = get_model(num_classes=7).to(device)
-    rounds = 5
-    history_acc, history_f1 = [], []
+    
+    # -------------------------------------------------------------------
+    # CHANGE COMMUNICATION ROUNDS HERE (e.g., 50 or 100)
+    # -------------------------------------------------------------------
+    rounds = 50 
+    
+    history_acc, history_prec, history_rec, history_f1 = [], [], [], []
 
-    print("\n--- Starting Federated Training & Evaluation ---")
+    print(f"\n--- Starting Federated Training ({rounds} Rounds) ---")
     for r in range(rounds):
         print(f"\n--- Communication Round {r+1}/{rounds} ---")
         client_weights, client_sizes = [], []
@@ -86,20 +133,25 @@ def main():
         
         acc, prec, rec, f1 = evaluate_model(global_model, test_loader, device=device)
         history_acc.append(acc)
+        history_prec.append(prec)
+        history_rec.append(rec)
         history_f1.append(f1)
-        print(f"Global Model Metrics -> Test Accuracy: {acc*100:.2f}%, F1-Score: {f1:.4f}")
+        
+        print(f"Round {r+1} Metrics -> Acc: {acc*100:.2f}%, Prec: {prec:.4f}, Rec: {rec:.4f}, F1: {f1:.4f}")
 
-    os.makedirs("./results", exist_ok=True)
-    plt.figure(figsize=(8, 5))
-    plt.plot(range(1, rounds+1), history_acc, label='Test Accuracy', marker='o')
-    plt.plot(range(1, rounds+1), history_f1, label='Test F1-Score', marker='s')
-    plt.xlabel('Communication Rounds')
-    plt.ylabel('Score')
-    plt.title('IA-D FedAvg Performance on HAM10000')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig('./results/performance_curve.png')
-    print("\n[SUCCESS] Execution complete. Curve saved to './results/performance_curve.png'")
+    # Save to CSV for future plotting or papers
+    df_metrics = pd.DataFrame({
+        'Round': range(1, rounds + 1),
+        'Accuracy': history_acc,
+        'Precision': history_prec,
+        'Recall': history_rec,
+        'F1_Score': history_f1
+    })
+    df_metrics.to_csv('./results/metrics_history.csv', index=False)
+
+    # Plot Visualizations
+    final_metrics = [history_acc[-1], history_prec[-1], history_rec[-1], history_f1[-1]]
+    plot_and_save_results(history_acc, history_f1, final_metrics, rounds)
 
 if __name__ == "__main__":
     main()
