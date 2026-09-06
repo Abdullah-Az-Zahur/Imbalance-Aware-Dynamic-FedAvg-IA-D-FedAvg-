@@ -1,59 +1,59 @@
 import os
-import zipfile
-import urllib.request
+import shutil
 from tqdm import tqdm
 import pandas as pd
 from PIL import Image
 import torch
-from torch.utils.data import Dataset, DataLoader
-from torchvision import transforms
-
-# --- Automatic Download & Extract Helper ---
-class DownloadProgressBar(tqdm):
-    def update_to(self, b=1, bsize=1, tsize=None):
-        if tsize is not None:
-            self.total = tsize
-        self.update(b * bsize - self.n)
+from torch.utils.data import Dataset
+import kagglehub
 
 def setup_ham10000_dataset(data_dir="./data"):
     os.makedirs(data_dir, exist_ok=True)
-    extract_path = os.path.join(data_dir, "HAM10000_images")
-    zip_path = os.path.join(data_dir, "skin-cancer-mnist-ham10000.zip")
+    images_dir = os.path.join(data_dir, "HAM10000_images")
+    metadata_csv = os.path.join(data_dir, "HAM10000_metadata.csv")
     
-    # Check 1: Extraction Complete?
-    if os.path.exists(extract_path) and len(os.listdir(extract_path)) > 0:
-        print("[INFO] Extracted dataset already exists. Skipping download and extraction.")
-        return extract_path
+    # Check 1: Extract/Setup Already Done?
+    if os.path.exists(images_dir) and os.path.exists(metadata_csv):
+        if len(os.listdir(images_dir)) > 0:
+            print("[INFO] Dataset already set up. Skipping download.")
+            return images_dir, metadata_csv
 
-    # Check 2: Zip File Exists? If not, Download
-    if not os.path.exists(zip_path):
-        print("[INFO] Downloading HAM10000 Dataset...")
-        # Direct public mirror URL for HAM10000 (Kaggle direct mirror)
-        url = "https://dataverse.harvard.edu/api/access/datafile/3037206" # Metadata & images archive
+    print("[INFO] Downloading HAM10000 dataset via KaggleHub...")
+    try:
+        # Download latest version via KaggleHub
+        path = kagglehub.dataset_download("kmader/skin-cancer-mnist-ham10000")
+        print(f"[SUCCESS] Downloaded to cache path: {path}")
+
+        # Organize images into ./data/HAM10000_images
+        os.makedirs(images_dir, exist_ok=True)
         
-        try:
-            with DownloadProgressBar(unit='B', unit_scale=True, miniters=1, desc="HAM10000 Download") as t:
-                urllib.request.urlretrieve(url, filename=zip_path, reporthook=t.update_to)
-        except Exception as e:
-            print(f"[ERROR] Download failed: {e}")
-            print("[TIP] You can manually place 'HAM10000_images' folder inside the './data' directory.")
-            return None
-    else:
-        print("[INFO] Zip file already downloaded. Skipping download.")
+        print("[INFO] Organizing dataset files...")
+        # HAM10000 split images in two folders (part_1 and part_2)
+        for part in ["HAM10000_images_part_1", "HAM10000_images_part_2"]:
+            part_path = os.path.join(path, part)
+            if os.path.exists(part_path):
+                files = os.listdir(part_path)
+                for f in tqdm(files, desc=f"Moving {part}"):
+                    src = os.path.join(part_path, f)
+                    dst = os.path.join(images_dir, f)
+                    if not os.path.exists(dst):
+                        shutil.copy(src, dst)
 
-    # Check 3: Extraction Step with Progress Bar
-    print("[INFO] Extracting dataset...")
-    os.makedirs(extract_path, exist_ok=True)
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-        members = zip_ref.infolist()
-        for member in tqdm(members, desc="Extracting Files"):
-            zip_ref.extract(member, extract_path)
-            
-    print("[SUCCESS] Dataset setup complete!")
-    return extract_path
+        # Copy Metadata CSV
+        src_csv = os.path.join(path, "HAM10000_metadata.csv")
+        if os.path.exists(src_csv):
+            shutil.copy(src_csv, metadata_csv)
+
+        print("[SUCCESS] HAM10000 Dataset ready for training!")
+        return images_dir, metadata_csv
+
+    except Exception as e:
+        print(f"[ERROR] Failed to download automatically: {e}")
+        print("[TIP] You can manually download HAM10000 from Kaggle and put images in './data/HAM10000_images' and CSV at './data/HAM10000_metadata.csv'")
+        return None, None
 
 
-# --- PyTorch Custom Dataset ---
+# --- PyTorch Custom Dataset Class ---
 class HAM10000Dataset(Dataset):
     def __init__(self, df, img_dir, transform=None):
         self.df = df
@@ -64,17 +64,18 @@ class HAM10000Dataset(Dataset):
         return len(self.df)
 
     def __getitem__(self, idx):
-        img_name = f"{self.df.iloc[idx, 0]}.jpg"
-        img_path = os.path.join(self.img_dir, img_name)
+        # Retrieve image ID and target label
+        img_id = self.df.iloc[idx]['image_id']
+        label = self.df.iloc[idx]['cell_type_idx']
         
+        img_path = os.path.join(self.img_dir, f"{img_id}.jpg")
         image = Image.open(img_path).convert('RGB')
-        label = self.df.iloc[idx, 1]
 
         if self.transform:
             image = self.transform(image)
 
-        return image, label
+        return image, torch.tensor(label, dtype=torch.long)
+
 
 if __name__ == "__main__":
-    # Test script locally
     setup_ham10000_dataset()
